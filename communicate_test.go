@@ -9,12 +9,10 @@ import (
 	"time"
 )
 
-func TestHandshakeErrorKeepsTheBadHandshakeText(t *testing.T) {
-	// The retry wrapper in internal/tts recognises a rejection by the
-	// "bad handshake" substring, because gorilla/websocket's errors do not
-	// survive wrapping as sentinels.
+func TestHandshakeErrorDescribesRejection(t *testing.T) {
 	resp := &http.Response{
 		StatusCode: http.StatusForbidden,
+		Header:     http.Header{"Content-Type": {"text/plain; charset=utf-8"}},
 		Body:       io.NopCloser(strings.NewReader(`{"error":"Invalid Sec-MS-GEC token"}`)),
 	}
 	err := handshakeError(errors.New("websocket: bad handshake"), resp)
@@ -22,10 +20,31 @@ func TestHandshakeErrorKeepsTheBadHandshakeText(t *testing.T) {
 	if !errors.Is(err, ErrWebSocket) {
 		t.Fatalf("handshakeError() = %v, want it to wrap ErrWebSocket", err)
 	}
-	if !strings.Contains(err.Error(), "bad handshake") {
-		t.Fatalf("handshakeError() = %v, want it to keep the bad handshake text", err)
+	// Callers switch on the status to decide whether another attempt is worth
+	// the delay, so it has to survive as a typed field.
+	var handshake *HandshakeError
+	if !errors.As(err, &handshake) {
+		t.Fatalf("handshakeError() = %v, want a *HandshakeError", err)
 	}
-	for _, want := range []string{"HTTP 403", "Invalid Sec-MS-GEC token"} {
+	if handshake.StatusCode != http.StatusForbidden {
+		t.Fatalf("StatusCode = %d, want %d", handshake.StatusCode, http.StatusForbidden)
+	}
+	for _, want := range []string{"bad handshake", "HTTP 403", "no upgrade header", "Invalid Sec-MS-GEC token"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("handshakeError() = %v, want it to mention %q", err, want)
+		}
+	}
+}
+
+// TestHandshakeErrorOnPlainHTTPAnswer covers the case seen behind a middlebox
+// that rewrites the upgrade into a plain GET: Microsoft's front door answers it
+// with 200 and an empty body.
+func TestHandshakeErrorOnPlainHTTPAnswer(t *testing.T) {
+	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(""))}
+
+	err := handshakeError(errors.New("websocket: bad handshake"), resp)
+
+	for _, want := range []string{"bad handshake", "HTTP 200", "no upgrade header", "empty body"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("handshakeError() = %v, want it to mention %q", err, want)
 		}

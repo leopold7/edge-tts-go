@@ -31,9 +31,12 @@ identify:
   the token moved to `gec.go`, and `Date` parsing also accepts a numeric zone
   offset.
 - `voices.go` — the voice list is requested from v2 first and falls back to v1.
-- `communicate.go` — a refused handshake now reports the HTTP status and a
-  snippet of the response body, which is the difference between a stale token, a
-  throttled address and a proxy answering instead of the service.
+- `communicate.go` — a refused handshake is reported as a `*HandshakeError`
+  carrying the HTTP status, whether the upgrade header survived, and a snippet
+  of the body. That is the difference between a stale token, a throttled
+  address, a proxy answering instead of the service, and a middlebox that
+  rewrote the upgrade into a plain GET (Microsoft answers one with 200 and an
+  empty body).
 
 Every change is marked with a `Patched` comment in the source.
 

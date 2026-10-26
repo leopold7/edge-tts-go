@@ -276,23 +276,67 @@ func (c *Communicate) connect(ctx context.Context) (*websocket.Conn, error) {
 	return nil, handshakeError(err, resp)
 }
 
-// handshakeError wraps a dial failure together with what the server answered.
+// HandshakeError is a refused WebSocket upgrade.
 //
-// gorilla/websocket reports every refused upgrade as the bare sentinel
-// "websocket: bad handshake" while keeping the response readable, so without
-// the status and the body the three causes behind an Edge TTS rejection — a
-// stale token, a throttled address, and a proxy answering instead of the
-// service — look identical in the logs.
+// gorilla/websocket reports every refusal as the same bare "websocket: bad
+// handshake" while keeping the response readable, so the causes behind an Edge
+// TTS rejection — a stale token, a throttled address, a proxy answering instead
+// of the service, a middlebox that rewrote the upgrade into a plain GET — are
+// indistinguishable without the status and the response headers.
+type HandshakeError struct {
+	// StatusCode is the status the server answered the upgrade with.
+	StatusCode int
+
+	// Detail summarises the response, for the log line.
+	Detail string
+
+	// err is the underlying dial error, normally gorilla's bad handshake.
+	err error
+}
+
+func (e *HandshakeError) Error() string {
+	if e.Detail == "" {
+		return fmt.Sprintf("edgetts: websocket error: %v (HTTP %d)", e.err, e.StatusCode)
+	}
+	return fmt.Sprintf("edgetts: websocket error: %v (HTTP %d: %s)", e.err, e.StatusCode, e.Detail)
+}
+
+// Unwrap reports the failure as a WebSocket error, which is how callers
+// recognise a rejected handshake.
+func (e *HandshakeError) Unwrap() error { return ErrWebSocket }
+
+// handshakeError wraps a dial failure together with what the server answered.
 func handshakeError(err error, resp *http.Response) error {
 	if resp == nil {
 		return fmt.Errorf("%w: %v", ErrWebSocket, err)
 	}
+	return &HandshakeError{StatusCode: resp.StatusCode, Detail: responseDetail(resp), err: err}
+}
 
-	detail := fmt.Sprintf("HTTP %d", resp.StatusCode)
-	if snippet := responseSnippet(resp); snippet != "" {
-		detail += " " + snippet
+// responseDetail summarises a handshake response: whether the upgrade survived
+// the trip, which layer answered, and what it said.
+func responseDetail(resp *http.Response) string {
+	var parts []string
+
+	// A response without the upgrade header was never a WebSocket handshake:
+	// the request reached the server as a plain GET, which means a proxy or a
+	// firewall in between rewrote it. Microsoft's front door answers such a
+	// request with 200 and an empty body.
+	if resp.Header.Get("Upgrade") == "" {
+		parts = append(parts, "no upgrade header")
 	}
-	return fmt.Errorf("%w: %v (%s)", ErrWebSocket, err, detail)
+	for _, name := range []string{"Server", "X-CDN-TraceID", "Content-Type", "Location"} {
+		if value := resp.Header.Get(name); value != "" {
+			parts = append(parts, name+": "+value)
+		}
+	}
+	if snippet := responseSnippet(resp); snippet != "" {
+		parts = append(parts, "body: "+snippet)
+	} else {
+		parts = append(parts, "empty body")
+	}
+
+	return strings.Join(parts, ", ")
 }
 
 // responseSnippet returns the beginning of a handshake response body on a
