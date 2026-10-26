@@ -273,7 +273,7 @@ func (c *Communicate) connect(ctx context.Context) (*websocket.Conn, error) {
 		}
 	}
 
-	return nil, handshakeError(err, resp)
+	return nil, handshakeError(err, resp, c.proxy)
 }
 
 // HandshakeError is a refused WebSocket upgrade.
@@ -305,18 +305,20 @@ func (e *HandshakeError) Error() string {
 // recognise a rejected handshake.
 func (e *HandshakeError) Unwrap() error { return ErrWebSocket }
 
-// handshakeError wraps a dial failure together with what the server answered.
-func handshakeError(err error, resp *http.Response) error {
+// handshakeError wraps a dial failure together with what the server answered
+// and how the connection was routed.
+func handshakeError(err error, resp *http.Response, proxy string) error {
 	if resp == nil {
 		return fmt.Errorf("%w: %v", ErrWebSocket, err)
 	}
-	return &HandshakeError{StatusCode: resp.StatusCode, Detail: responseDetail(resp), Err: err}
+	return &HandshakeError{StatusCode: resp.StatusCode, Detail: responseDetail(resp, proxy), Err: err}
 }
 
-// responseDetail summarises a handshake response: whether the upgrade survived
-// the trip, which layer answered, and what it said.
-func responseDetail(resp *http.Response) string {
-	var parts []string
+// responseDetail summarises a handshake response: how the connection was
+// routed, whether the upgrade survived the trip, which layer answered, and what
+// it said.
+func responseDetail(resp *http.Response, proxy string) string {
+	parts := []string{routeDescription(proxy)}
 
 	// A response without the upgrade header was never a WebSocket handshake:
 	// the request reached the server as a plain GET, which means a proxy or a
@@ -337,6 +339,18 @@ func responseDetail(resp *http.Response) string {
 	}
 
 	return strings.Join(parts, ", ")
+}
+
+// routeDescription names the proxy a rejected connection went through, with any
+// credentials stripped, so the log says whether a middlebox was even in play.
+func routeDescription(proxy string) string {
+	if proxy == "" {
+		return "direct"
+	}
+	if parsed, err := url.Parse(proxy); err == nil && parsed.Host != "" {
+		return "via proxy " + parsed.Redacted()
+	}
+	return "via proxy"
 }
 
 // responseSnippet returns the beginning of a handshake response body on a
