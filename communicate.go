@@ -290,15 +290,15 @@ type HandshakeError struct {
 	// Detail summarises the response, for the log line.
 	Detail string
 
-	// err is the underlying dial error, normally gorilla's bad handshake.
-	err error
+	// Err is the underlying dial error, normally gorilla's bad handshake.
+	Err error
 }
 
 func (e *HandshakeError) Error() string {
 	if e.Detail == "" {
-		return fmt.Sprintf("edgetts: websocket error: %v (HTTP %d)", e.err, e.StatusCode)
+		return fmt.Sprintf("edgetts: websocket error: %v (HTTP %d)", e.Err, e.StatusCode)
 	}
-	return fmt.Sprintf("edgetts: websocket error: %v (HTTP %d: %s)", e.err, e.StatusCode, e.Detail)
+	return fmt.Sprintf("edgetts: websocket error: %v (HTTP %d: %s)", e.Err, e.StatusCode, e.Detail)
 }
 
 // Unwrap reports the failure as a WebSocket error, which is how callers
@@ -310,7 +310,7 @@ func handshakeError(err error, resp *http.Response) error {
 	if resp == nil {
 		return fmt.Errorf("%w: %v", ErrWebSocket, err)
 	}
-	return &HandshakeError{StatusCode: resp.StatusCode, Detail: responseDetail(resp), err: err}
+	return &HandshakeError{StatusCode: resp.StatusCode, Detail: responseDetail(resp), Err: err}
 }
 
 // responseDetail summarises a handshake response: whether the upgrade survived
