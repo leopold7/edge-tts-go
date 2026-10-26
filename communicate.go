@@ -2,6 +2,7 @@ package edgetts
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -287,7 +288,55 @@ func (c *Communicate) connect(ctx context.Context) (*websocket.Conn, error) {
 		}
 	}
 
-	return nil, handshakeError(err, resp, handshakeDial{proxy: c.proxy, remote: remote})
+	dial := handshakeDial{proxy: c.proxy, remote: remote}
+	if resp != nil && c.proxy == "" && remote != "" {
+		// Direct dialling, so the certificate the address presents is a fact
+		// worth keeping: a middlebox that terminates TLS has to show its own.
+		dial.peer = tlsPeerDescription(ctx, remote, c.connectTimeout)
+	}
+	return nil, handshakeError(err, resp, dial)
+}
+
+// tlsPeerDescription reports the certificate and protocol the address at addr
+// presents for the service, or an empty string when the probe does not finish.
+func tlsPeerDescription(ctx context.Context, addr string, timeout time.Duration) string {
+	if timeout <= 0 || timeout > 5*time.Second {
+		timeout = 5 * time.Second
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	dialer := &tls.Dialer{
+		NetDialer: &net.Dialer{Timeout: timeout},
+		Config:    &tls.Config{ServerName: host},
+	}
+	conn, err := dialer.DialContext(probeCtx, "tcp", addr)
+	if err != nil {
+		return ""
+	}
+	defer conn.Close()
+
+	tlsConn, ok := conn.(*tls.Conn)
+	if !ok {
+		return ""
+	}
+	state := tlsConn.ConnectionState()
+	if len(state.PeerCertificates) == 0 {
+		return ""
+	}
+
+	issuer := state.PeerCertificates[0].Issuer.CommonName
+	if issuer == "" && len(state.PeerCertificates[0].Issuer.Organization) > 0 {
+		issuer = state.PeerCertificates[0].Issuer.Organization[0]
+	}
+	negotiated := state.NegotiatedProtocol
+	if negotiated == "" {
+		negotiated = "no ALPN"
+	}
+	if issuer == "" {
+		issuer = "unknown issuer"
+	}
+	return fmt.Sprintf("tls peer %s, issued by %s", negotiated, issuer)
 }
 
 // HandshakeError is a refused WebSocket upgrade.
@@ -324,6 +373,7 @@ func (e *HandshakeError) Unwrap() error { return ErrWebSocket }
 type handshakeDial struct {
 	proxy  string // configured proxy, empty when the dial went direct
 	remote string // address the TCP connection reached, empty when unknown
+	peer   string // certificate the address presented, empty when not probed
 }
 
 // handshakeError wraps a dial failure together with what the server answered
@@ -340,6 +390,9 @@ func handshakeError(err error, resp *http.Response, dial handshakeDial) error {
 // it said.
 func responseDetail(resp *http.Response, dial handshakeDial) string {
 	parts := []string{routeDescription(dial)}
+	if dial.peer != "" {
+		parts = append(parts, dial.peer)
+	}
 
 	// A response without the upgrade header was never a WebSocket handshake:
 	// the request reached the server as a plain GET, which means a proxy or a

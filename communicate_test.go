@@ -60,10 +60,15 @@ func TestHandshakeErrorOnPlainHTTPAnswer(t *testing.T) {
 func TestHandshakeErrorNamesTheDirectTarget(t *testing.T) {
 	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(""))}
 
-	err := handshakeError(errors.New("websocket: bad handshake"), resp, handshakeDial{remote: "20.1.2.3:443"})
+	err := handshakeError(errors.New("websocket: bad handshake"), resp, handshakeDial{
+		remote: "20.1.2.3:443",
+		peer:   "tls peer no ALPN, issued by R11",
+	})
 
-	if !strings.Contains(err.Error(), "direct to 20.1.2.3:443") {
-		t.Fatalf("handshakeError() = %v, want it to name the address that answered", err)
+	for _, want := range []string{"direct to 20.1.2.3:443", "issued by R11"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("handshakeError() = %v, want it to mention %q", err, want)
+		}
 	}
 }
 
