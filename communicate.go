@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -238,6 +239,19 @@ func (c *Communicate) connect(ctx context.Context) (*websocket.Conn, error) {
 		HandshakeTimeout:  c.connectTimeout,
 	}
 
+	// Record where the TCP connection actually went. A hijacked name or a
+	// transparent gateway shows up here as an address that is not Microsoft's,
+	// which a status code alone cannot tell.
+	var remote string
+	forward := &net.Dialer{Timeout: c.connectTimeout}
+	dialer.NetDialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		conn, err := forward.DialContext(ctx, network, addr)
+		if err == nil {
+			remote = conn.RemoteAddr().String()
+		}
+		return conn, err
+	}
+
 	if c.proxy != "" {
 		proxyURL, err := url.Parse(c.proxy)
 		if err != nil {
@@ -273,7 +287,7 @@ func (c *Communicate) connect(ctx context.Context) (*websocket.Conn, error) {
 		}
 	}
 
-	return nil, handshakeError(err, resp, c.proxy)
+	return nil, handshakeError(err, resp, handshakeDial{proxy: c.proxy, remote: remote})
 }
 
 // HandshakeError is a refused WebSocket upgrade.
@@ -305,20 +319,27 @@ func (e *HandshakeError) Error() string {
 // recognise a rejected handshake.
 func (e *HandshakeError) Unwrap() error { return ErrWebSocket }
 
+// handshakeDial records how a rejected connection was routed, which is what
+// separates "the service refused us" from "something answered in its place".
+type handshakeDial struct {
+	proxy  string // configured proxy, empty when the dial went direct
+	remote string // address the TCP connection reached, empty when unknown
+}
+
 // handshakeError wraps a dial failure together with what the server answered
 // and how the connection was routed.
-func handshakeError(err error, resp *http.Response, proxy string) error {
+func handshakeError(err error, resp *http.Response, dial handshakeDial) error {
 	if resp == nil {
 		return fmt.Errorf("%w: %v", ErrWebSocket, err)
 	}
-	return &HandshakeError{StatusCode: resp.StatusCode, Detail: responseDetail(resp, proxy), Err: err}
+	return &HandshakeError{StatusCode: resp.StatusCode, Detail: responseDetail(resp, dial), Err: err}
 }
 
 // responseDetail summarises a handshake response: how the connection was
 // routed, whether the upgrade survived the trip, which layer answered, and what
 // it said.
-func responseDetail(resp *http.Response, proxy string) string {
-	parts := []string{routeDescription(proxy)}
+func responseDetail(resp *http.Response, dial handshakeDial) string {
+	parts := []string{routeDescription(dial)}
 
 	// A response without the upgrade header was never a WebSocket handshake:
 	// the request reached the server as a plain GET, which means a proxy or a
@@ -341,16 +362,20 @@ func responseDetail(resp *http.Response, proxy string) string {
 	return strings.Join(parts, ", ")
 }
 
-// routeDescription names the proxy a rejected connection went through, with any
-// credentials stripped, so the log says whether a middlebox was even in play.
-func routeDescription(proxy string) string {
-	if proxy == "" {
+// routeDescription names how a rejected connection was routed, with proxy
+// credentials stripped, so the log says whether a middlebox was even in play
+// and, when dialling direct, which address answered.
+func routeDescription(dial handshakeDial) string {
+	if dial.proxy != "" {
+		if parsed, err := url.Parse(dial.proxy); err == nil && parsed.Host != "" {
+			return "via proxy " + parsed.Redacted()
+		}
+		return "via proxy"
+	}
+	if dial.remote == "" {
 		return "direct"
 	}
-	if parsed, err := url.Parse(proxy); err == nil && parsed.Host != "" {
-		return "via proxy " + parsed.Redacted()
-	}
-	return "via proxy"
+	return "direct to " + dial.remote
 }
 
 // responseSnippet returns the beginning of a handshake response body on a

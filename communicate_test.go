@@ -15,7 +15,7 @@ func TestHandshakeErrorDescribesRejection(t *testing.T) {
 		Header:     http.Header{"Content-Type": {"text/plain; charset=utf-8"}},
 		Body:       io.NopCloser(strings.NewReader(`{"error":"Invalid Sec-MS-GEC token"}`)),
 	}
-	err := handshakeError(errors.New("websocket: bad handshake"), resp, "")
+	err := handshakeError(errors.New("websocket: bad handshake"), resp, handshakeDial{})
 
 	if !errors.Is(err, ErrWebSocket) {
 		t.Fatalf("handshakeError() = %v, want it to wrap ErrWebSocket", err)
@@ -42,7 +42,7 @@ func TestHandshakeErrorDescribesRejection(t *testing.T) {
 func TestHandshakeErrorOnPlainHTTPAnswer(t *testing.T) {
 	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(""))}
 
-	err := handshakeError(errors.New("websocket: bad handshake"), resp, "http://user:secret@127.0.0.1:8889")
+	err := handshakeError(errors.New("websocket: bad handshake"), resp, handshakeDial{proxy: "http://user:secret@127.0.0.1:8889"})
 
 	for _, want := range []string{"bad handshake", "HTTP 200", "via proxy", "127.0.0.1:8889", "no upgrade header", "empty body"} {
 		if !strings.Contains(err.Error(), want) {
@@ -54,8 +54,21 @@ func TestHandshakeErrorOnPlainHTTPAnswer(t *testing.T) {
 	}
 }
 
+// TestHandshakeErrorNamesTheDirectTarget covers the case where nothing is
+// proxied: the address that answered is the only clue to a hijacked name or a
+// transparent gateway.
+func TestHandshakeErrorNamesTheDirectTarget(t *testing.T) {
+	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(""))}
+
+	err := handshakeError(errors.New("websocket: bad handshake"), resp, handshakeDial{remote: "20.1.2.3:443"})
+
+	if !strings.Contains(err.Error(), "direct to 20.1.2.3:443") {
+		t.Fatalf("handshakeError() = %v, want it to name the address that answered", err)
+	}
+}
+
 func TestHandshakeErrorWithoutResponse(t *testing.T) {
-	err := handshakeError(errors.New("dial tcp: lookup api.msedgeservices.com: no such host"), nil, "")
+	err := handshakeError(errors.New("dial tcp: lookup api.msedgeservices.com: no such host"), nil, handshakeDial{})
 
 	if !errors.Is(err, ErrWebSocket) {
 		t.Fatalf("handshakeError() = %v, want it to wrap ErrWebSocket", err)
