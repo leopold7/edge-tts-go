@@ -215,16 +215,15 @@ func (c *Communicate) streamChunk(
 }
 
 // synthesizeURL builds the WebSocket URL for a single synthesis attempt.
-// Patched: the v2 wssURL already carries an
-// Ocp-Apim-Subscription-Key query string, so the per-attempt parameters are
-// appended with "&" instead of "?" to keep the URL valid.
+// The wssURL already carries a TrustedClientToken query string, so the
+// per-attempt parameters are appended with "&" instead of "?".
 func synthesizeURL() string {
 	separator := "?"
 	if strings.Contains(wssURL, "?") {
 		separator = "&"
 	}
 	return wssURL + separator +
-		"ConnectionId=" + generateMUID() +
+		"ConnectionId=" + connectID() +
 		"&Sec-MS-GEC=" + generateSecMSGEC() +
 		"&Sec-MS-GEC-Version=" + secMSGECVersion
 }

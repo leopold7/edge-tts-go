@@ -11,9 +11,6 @@ import (
 )
 
 // ListVoices fetches the list of available voices from the Edge TTS service.
-// Patched: the v2 catalog is requested first and the legacy v1
-// catalog is used as a fallback, so the list works today and moves to v2 on
-// its own once Microsoft starts serving it.
 func ListVoices(ctx context.Context, proxy string) ([]Voice, error) {
 	client := &http.Client{}
 	if proxy != "" {
@@ -24,26 +21,7 @@ func ListVoices(ctx context.Context, proxy string) ([]Voice, error) {
 		client.Transport = &http.Transport{Proxy: http.ProxyURL(proxyURL)}
 	}
 
-	return fetchVoiceListWithFallback(ctx, client, voiceListURL, legacyVoiceListURL)
-}
-
-// fetchVoiceListWithFallback returns the primary list, or the fallback list
-// when the primary one cannot be read. A cancelled context stops before the
-// fallback request instead of issuing another doomed call.
-func fetchVoiceListWithFallback(ctx context.Context, client *http.Client, primaryURL, fallbackURL string) ([]Voice, error) {
-	voices, err := fetchVoiceList(ctx, client, primaryURL)
-	if err == nil {
-		return voices, nil
-	}
-	if ctx.Err() != nil {
-		return nil, err
-	}
-
-	fallback, fallbackErr := fetchVoiceList(ctx, client, fallbackURL)
-	if fallbackErr != nil {
-		return nil, fmt.Errorf("%v; fallback %v", err, fallbackErr)
-	}
-	return fallback, nil
+	return fetchVoiceList(ctx, client, voiceListURL)
 }
 
 // fetchVoiceList performs one voice list request and parses the response.

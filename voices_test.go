@@ -25,70 +25,48 @@ func voiceListServer(t *testing.T, status int, body string, calls *int, authorit
 	return server
 }
 
-func TestFetchVoiceListWithFallbackPrefersPrimary(t *testing.T) {
-	primaryCalls, fallbackCalls := 0, 0
-	primary := voiceListServer(t, http.StatusOK, `[{"ShortName":"v2-Voice"}]`, &primaryCalls, nil)
-	fallback := voiceListServer(t, http.StatusOK, `[{"ShortName":"v1-Voice"}]`, &fallbackCalls, nil)
+func TestFetchVoiceListParsesCatalog(t *testing.T) {
+	calls := 0
+	authority := ""
+	server := voiceListServer(t, http.StatusOK, `[{"ShortName":"en-US-EmmaMultilingualNeural"}]`, &calls, &authority)
 
-	voices, err := fetchVoiceListWithFallback(context.Background(), http.DefaultClient, primary.URL, fallback.URL)
+	voices, err := fetchVoiceList(context.Background(), http.DefaultClient, server.URL)
 	if err != nil {
-		t.Fatalf("fetchVoiceListWithFallback() error = %v", err)
+		t.Fatalf("fetchVoiceList() error = %v", err)
 	}
-	if primaryCalls != 1 || fallbackCalls != 0 {
-		t.Fatalf("calls = primary %d, fallback %d; want 1 and 0", primaryCalls, fallbackCalls)
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1", calls)
 	}
-	if len(voices) != 1 || voices[0].ShortName != "v2-Voice" {
-		t.Fatalf("voices = %#v, want the primary catalog", voices)
+	if len(voices) != 1 || voices[0].ShortName != "en-US-EmmaMultilingualNeural" {
+		t.Fatalf("voices = %#v, want the parsed catalog", voices)
+	}
+	if want := strings.TrimPrefix(server.URL, "http://"); authority != want {
+		t.Fatalf("Authority = %q, want %q", authority, want)
 	}
 }
 
-func TestFetchVoiceListWithFallbackUsesLegacyOnRejection(t *testing.T) {
-	primaryCalls, fallbackCalls := 0, 0
-	fallbackAuthority := ""
-	primary := voiceListServer(t, http.StatusForbidden, "", &primaryCalls, nil)
-	fallback := voiceListServer(t, http.StatusOK, `[{"ShortName":"v1-Voice"}]`, &fallbackCalls, &fallbackAuthority)
+func TestFetchVoiceListReportsStatus(t *testing.T) {
+	server := voiceListServer(t, http.StatusForbidden, "", nil, nil)
 
-	voices, err := fetchVoiceListWithFallback(context.Background(), http.DefaultClient, primary.URL, fallback.URL)
-	if err != nil {
-		t.Fatalf("fetchVoiceListWithFallback() error = %v", err)
-	}
-	if primaryCalls != 1 || fallbackCalls != 1 {
-		t.Fatalf("calls = primary %d, fallback %d; want 1 and 1", primaryCalls, fallbackCalls)
-	}
-	if len(voices) != 1 || voices[0].ShortName != "v1-Voice" {
-		t.Fatalf("voices = %#v, want the fallback catalog", voices)
-	}
-	if want := strings.TrimPrefix(fallback.URL, "http://"); fallbackAuthority != want {
-		t.Fatalf("fallback Authority = %q, want %q", fallbackAuthority, want)
-	}
-}
-
-func TestFetchVoiceListWithFallbackReportsBothFailures(t *testing.T) {
-	primary := voiceListServer(t, http.StatusForbidden, "", nil, nil)
-	fallback := voiceListServer(t, http.StatusNotFound, "", nil, nil)
-
-	_, err := fetchVoiceListWithFallback(context.Background(), http.DefaultClient, primary.URL, fallback.URL)
+	_, err := fetchVoiceList(context.Background(), http.DefaultClient, server.URL)
 	if err == nil {
-		t.Fatal("fetchVoiceListWithFallback() error = nil, want a failure")
+		t.Fatal("fetchVoiceList() error = nil, want a failure")
 	}
-	for _, want := range []string{"403", "404"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("error = %v, want it to mention %s", err, want)
-		}
+	if !strings.Contains(err.Error(), "403") {
+		t.Fatalf("error = %v, want it to mention 403", err)
 	}
 }
 
-func TestFetchVoiceListWithFallbackStopsWhenContextIsDone(t *testing.T) {
+func TestFetchVoiceListStopsWhenContextIsDone(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	primaryCalls, fallbackCalls := 0, 0
-	primary := voiceListServer(t, http.StatusForbidden, "", &primaryCalls, nil)
-	fallback := voiceListServer(t, http.StatusOK, `[{"ShortName":"v1-Voice"}]`, &fallbackCalls, nil)
+	calls := 0
+	server := voiceListServer(t, http.StatusOK, `[]`, &calls, nil)
 
-	if _, err := fetchVoiceListWithFallback(ctx, http.DefaultClient, primary.URL, fallback.URL); err == nil {
-		t.Fatal("fetchVoiceListWithFallback() error = nil, want a failure")
+	if _, err := fetchVoiceList(ctx, http.DefaultClient, server.URL); err == nil {
+		t.Fatal("fetchVoiceList() error = nil, want a failure")
 	}
-	if fallbackCalls != 0 {
-		t.Fatalf("fallback calls = %d, want 0 for a cancelled context", fallbackCalls)
+	if calls != 0 {
+		t.Fatalf("calls = %d, want 0 for a cancelled context", calls)
 	}
 }

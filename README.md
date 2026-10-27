@@ -3,13 +3,12 @@
 A Go client for Microsoft Edge's Read Aloud text-to-speech service, usable from
 the command line or as a library.
 
-This module keeps working where the upstream Go port does not: Microsoft moved
-Read Aloud to the v2 endpoint (`api.msedgeservices.com/tts/cognitiveservices`)
-and, in October 2026, to the v2 `Sec-MS-GEC` token, while rejecting the legacy
-v1 endpoint and the plain SHA-256 v1 token with HTTP 403 during the WebSocket
-handshake. This module speaks only the v2 endpoint and signs every request with
-a v2 token. The voice catalog is still served by the legacy v1 host, so
-`ListVoices` asks v2 first and falls back to v1.
+This module keeps working where the upstream Go port does not: Microsoft now
+rejects the plain SHA-256 `Sec-MS-GEC` token with HTTP 403 during the WebSocket
+handshake, so every request is signed with the v2 token format described below.
+The endpoints are the ones the official client still uses — the WebSocket URL
+under `speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1`,
+with the voice catalog beside it.
 
 ## Provenance and licence
 
@@ -20,17 +19,17 @@ It is distributed under the same LGPL-3.0 terms; see [LICENSE](LICENSE).
 Changes against that base, which is the "modified version" the LGPL asks us to
 identify:
 
-- `constants.go`, `communicate.go` — synthesis moved to the v2 endpoint, with the
-  client token carried as the `Ocp-Apim-Subscription-Key` query parameter, and
-  `Sec-MS-GEC-Version` bumped to the `2-` prefix.
+- `constants.go` — `Sec-MS-GEC-Version` carries the `2-` prefix, the client
+  token is passed as `TrustedClientToken` (WebSocket) or `trustedclienttoken`
+  (voice list), and the browser version matches what `rany2/edge-tts` advertises.
 - `gec.go` (new) — generation of the v2 `Sec-MS-GEC` token, a `<16 hex>-<64 hex>`
   pair of a CS64 and a salted SHA-256 digest. A port of `generate_sec_ms_gec_v2`
   from `rany2/edge-tts` 7.3.0 (see rany2/edge-tts#492), verified against a token
   captured from Edge's own traffic.
-- `drm.go` — keeps the clock skew learned from a rejected handshake and the MUID;
-  the token moved to `gec.go`, and `Date` parsing also accepts a numeric zone
-  offset.
-- `voices.go` — the voice list is requested from v2 first and falls back to v1.
+- `drm.go` — keeps the clock skew learned from a rejected handshake, plus the
+  `muid` cookie and the `ConnectionId` UUID v4 for each attempt; the token moved
+  to `gec.go`, and `Date` parsing also accepts a numeric zone offset.
+- `voices.go` — listings use the same Read Aloud host as synthesis.
 - `communicate.go` — a refused handshake is reported as a `*HandshakeError`
   carrying the HTTP status, how the connection was routed (direct and to which
   address, or through which proxy), whether the upgrade header survived, and a

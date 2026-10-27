@@ -5,9 +5,11 @@ package edgetts
 // The token is built in gec.go.
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
-	"math/rand/v2"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -18,13 +20,30 @@ var (
 	clockSkewMu sync.Mutex
 )
 
-// generateMUID generates a random Machine User ID (32-character hex string).
+// generateMUID generates a random Machine User ID (32-character hex string),
+// used for the muid cookie.
 func generateMUID() string {
-	b := make([]byte, 16)
-	for i := range b {
-		b[i] = byte(rand.IntN(256))
+	return strings.ToUpper(hex.EncodeToString(randomBytes(16)))
+}
+
+// connectID generates the ConnectionId for one synthesis attempt, and the
+// X-RequestId of its SSML message: a UUID v4 without dashes, as edge-tts does.
+func connectID() string {
+	b := randomBytes(16)
+	b[6] = (b[6] & 0x0f) | 0x40 // version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // variant 10
+	return hex.EncodeToString(b)
+}
+
+// randomBytes returns n cryptographically random bytes. A failure here means
+// the OS entropy source is unusable, which no retry loop can fix, so the
+// connection attempt is aborted rather than carried on with weak identifiers.
+func randomBytes(n int) []byte {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		panic("edgetts: reading random bytes: " + err.Error())
 	}
-	return fmt.Sprintf("%X", b)
+	return b
 }
 
 // adjustClockSkew adjusts the local clock skew based on a server response.
